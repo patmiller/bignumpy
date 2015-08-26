@@ -1,3 +1,5 @@
+#define NPY_NO_DEPRECATED_API NPY_1_7_API_VERSION
+
 #include "Python.h"
 
 #include "numpy/ndarrayobject.h"
@@ -8,9 +10,21 @@
 
 #include <sys/mman.h>
 
+struct mapstate {
+  void* m;
+  size_t size;
+  int fd;
+};
+
+void destroy(void* state) {
+  free(state);
+}
+
 static PyObject* NUMPY = NULL;
 static PyObject* EMPTY = NULL;
 static PyObject* ZEROS = NULL;
+
+static PyTypeObject BignumpyType;
 
 static PyObject* bignumpy(PyObject* self, PyObject* args) {
   const char* filename = NULL;
@@ -32,8 +46,7 @@ static PyObject* bignumpy(PyObject* self, PyObject* args) {
   // type using the actual numpy interface
   z = /*owned*/ (PyArrayObject*)PyObject_CallFunctionObjArgs(ZEROS,EMPTY,dtype,NULL);
   if (!z) return NULL;
-  printf("--> "); PyObject_Print(z,stdout,1); puts("");
-  Py_INCREF(descr = z->descr);
+  Py_INCREF(descr = PyArray_DESCR(z));
   Py_DECREF(z); z = NULL;
 
   // OK, we can open the file.  If it does not exist, we may have to create it
@@ -98,7 +111,6 @@ static PyObject* bignumpy(PyObject* self, PyObject* args) {
       Py_DECREF(iterator);
     }
   }
-
   // Compute the number of required elements
   size_t nelm = 0;
   if (nd > 0) {
@@ -106,8 +118,6 @@ static PyObject* bignumpy(PyObject* self, PyObject* args) {
     int i;
     for(i=0;i<nd;++i) nelm *= dims[i];
   }
-  printf("Has %d dims\n",nd);
-  printf("nelm: %ld\n",(long)nelm);
 
   // ----------------------------------------------------------------------
   // Grow (but do not shrink) to be the expected size
@@ -125,27 +135,34 @@ static PyObject* bignumpy(PyObject* self, PyObject* args) {
   // ----------------------------------------------------------------------
   // At this point, we can map the values into memory
   // ----------------------------------------------------------------------
+  if (!expected) expected = 1; // mmap doesn't like 0 size
   void* m = mmap(NULL,expected,PROT_READ|PROT_WRITE,MAP_SHARED,fd,0);
   if (m == MAP_FAILED) {
+    printf("%s:%d: map fail here\n",__FILE__,__LINE__);
     Py_DECREF(descr);
     close(fd);
     return PyErr_SetFromErrnoWithFilename(PyExc_OSError,filename);
   }
 
-  return PyArray_NewFromDescr(
-			      &PyArray_Type,
+  // ----------------------------------------------------------------------
+  // Make a C object to hold the map state (pointer and size);
+  // ----------------------------------------------------------------------
+  struct mapstate* cobject = (struct mapstate*)malloc(sizeof(struct mapstate));
+  cobject->m = m;
+  cobject->size = expected;
+  cobject->fd = fd;
+  printf("Save m: %p sz: %ld fd: %d\n",m,expected,fd);
+  PyObject* vv = PyCObject_FromVoidPtr(cobject,destroy);
+  PyObject* zz = PyArray_NewFromDescr(
+			      &BignumpyType,
 			      descr, /* steals reference */
 			      nd,
 			      dims,
 			      strides,
 			      m,
-			      NPY_DEFAULT_FLAGS);
-			      
-			      
-
-
-  Py_INCREF(Py_None);
-  return Py_None;
+			      NPY_ARRAY_DEFAULT,
+			      vv);
+  return zz;
 }
 
 static PyMethodDef methods[] = {
@@ -154,15 +171,46 @@ static PyMethodDef methods[] = {
 };
 
 
+static int initialize(PyObject* self, PyObject* args, PyObject* kw) {
+  return -1;
+}
+
+static PyObject* __array_finalize__(PyObject* self, PyObject* object) {
+  puts("in finalize");
+  struct mapstate* cobject = (struct mapstate*)PyCObject_AsVoidPtr(object);
+  printf("M: %p sz: %ld fd: %d\n",cobject->m,cobject->size,cobject->fd);
+  munmap(cobject->m,cobject->size);
+  close(cobject->fd);
+  Py_DECREF(object);
+  puts("done finalize");
+
+  Py_INCREF(Py_None);
+  return Py_None;
+}
+
+static PyMethodDef bignumpy_methods[] = {
+  {"__array_finalize__",__array_finalize__,METH_O,""},
+  {NULL}
+};
+
 PyMODINIT_FUNC
 initbignumpy(void) {
   PyObject* m = Py_InitModule("bignumpy",methods);
   if (m == NULL) return;
 
-  PyModule_AddIntConstant(m,"MAXDIM",BIGNUMPY_MAXDIMS);
-
   // Initialize numpy API jump vectors
   import_array();
+
+  BignumpyType.tp_name = "bignumpy.Bignumpy";
+  BignumpyType.tp_basicsize = PyArray_Type.tp_basicsize;
+  BignumpyType.tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE;
+  BignumpyType.tp_init = initialize;
+  BignumpyType.tp_methods = bignumpy_methods;
+  if (PyType_Ready(&BignumpyType) < 0) return;
+  Py_INCREF(&BignumpyType);
+  PyModule_AddObject(m, "Bignumpy", (PyObject*)&BignumpyType);
+
+  PyModule_AddIntConstant(m,"MAXDIM",32);
 
   // We need the actual numpy.zeros for our API to convert dtypes
   NUMPY = PyImport_ImportModule("numpy");

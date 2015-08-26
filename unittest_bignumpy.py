@@ -18,7 +18,8 @@ class TestBignumpy(unittest.TestCase):
         return
 
     def test_badshape(self):
-        z = bignumpy.bignumpy('large0.raw','i')
+        z = bignumpy.bignumpy('large0.raw','i',None)
+        return
         z = bignumpy.bignumpy('large0.raw','i',None)
         with self.assertRaises(RuntimeError):
             z = bignumpy.bignumpy('large0.raw','i',object())
