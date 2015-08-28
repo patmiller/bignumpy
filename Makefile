@@ -23,7 +23,7 @@
 # ------------------------------------------------------------------------
 
 
-.PHONY: test
+.PHONY: test clean
 
 test: bignumpy.so
 	python unittest_bignumpy.py

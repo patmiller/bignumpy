@@ -34,6 +34,8 @@ SOFTWARE.
 
 #include <sys/mman.h>
 
+#define BIGNUMPY_MAXDIMS (32)
+
 struct BignumpyObject {
   char ignore[NPY_SIZEOF_PYARRAYOBJECT];
   int fd;
@@ -55,7 +57,6 @@ static PyObject* bignumpy(PyObject* self, PyObject* args) {
   PyArrayObject* z;
   PyArray_Descr* descr;
   int nd = 0;
-#define BIGNUMPY_MAXDIMS (128)
   npy_intp dims[BIGNUMPY_MAXDIMS];
   npy_intp strides[BIGNUMPY_MAXDIMS];
   size_t nelm;
@@ -206,6 +207,7 @@ static PyMethodDef methods[] = {
 void bignumpy_dealloc(PyObject* obj) {
   struct BignumpyObject* bno = (struct BignumpyObject*)obj;
 
+  //printf("D: %p\n",obj);
   if (bno->map) {
     munmap(bno->map,bno->size);
     close(bno->fd);
@@ -219,6 +221,7 @@ PyObject* bignumpy_alloc(PyTypeObject *type, Py_ssize_t items) {
   bno->fd = 0;
   bno->map = NULL;
   bno->size = 0;
+  //printf("A: %p\n",obj);
   return obj;
 }
 
@@ -240,7 +243,7 @@ initbignumpy(void) {
   Py_INCREF(&Bignumpy_Type);
   PyModule_AddObject(m, "Bignumpy", (PyObject*)&Bignumpy_Type);
 
-  PyModule_AddIntConstant(m,"MAXDIM",32);
+  PyModule_AddIntConstant(m,"MAXDIM",BIGNUMPY_MAXDIMS);
 
   // We need the actual numpy.zeros for our API to convert dtypes
   NUMPY = PyImport_ImportModule("numpy");
